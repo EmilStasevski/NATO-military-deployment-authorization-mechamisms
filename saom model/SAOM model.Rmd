@@ -1,0 +1,430 @@
+---
+title: "NATO saom model"
+author: "Staszewski"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+https://github.com/sandorjuhasz/saom-cluster/blob/master/scripts/_saom_models.R
+
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Loading libraries
+
+
+
+```{r, warning = FALSE, include=FALSE, show = False}
+memory.limit(size = 30000)
+library(RSiena)
+library(tidyverse)
+
+library(reshape2)
+library(network)
+
+library(statnet)
+library(ggforestplot)
+library(btergm)
+```
+
+
+
+
+
+
+
+```{r}
+balance = read.csv("~/Final Theses/code/data/balance.12.01.24.csv")
+balance = balance %>% filter(year > 1990)
+```
+
+
+
+
+#### Target matrices
+
+
+```{r, warning=FALSE}
+codes <- (unique(c(balance$ccode1, balance$ccode2)) )
+
+nms <- vector()
+nms3 <- vector()
+ct <- 1
+CUT_OFF <- 3.64
+
+i=1991    #### стартовое значение
+
+LAG <- 0  #### лаг эффекта предиктора
+yr<-(1991:2022)  ### период построения модели динамиики сети
+ly_r <- length(yr)  ### длина периода построения модели динамиики сети
+ly_rc <- ly_r-1  ### технические параметры для генерации матриц
+y_pr<-1987    ### технические параметры для генерации матриц
+window<-5   ### период построения модели динамиики сети +1
+Nodes<- 4 
+
+
+
+
+for (i in 1991:2022){
+  edges <- balance[balance$year == i,][c("ccode1","ccode2","log_troops")]
+  mat <- matrix(0, nrow= length(codes), ncol=length(codes), dimnames=list(codes, codes))
+  for (country1 in unique(codes)){
+    #print("trade")
+    #print(i)
+    #print(country1)
+    for (country2 in unique(codes)){
+      if(country1!=country2){
+        if ((length(edges[edges$ccode1==country1&edges$ccode2==country2,"log_troops"])>0)==TRUE) {
+          if(is.na(edges[edges$ccode1==country1&edges$ccode2==country2,"log_troops"])==FALSE){
+            if(edges[edges$ccode1==country1&edges$ccode2==country2,"log_troops"]>=0){
+              if (edges[edges$ccode1==country1&edges$ccode2==country2,"log_troops"]>CUT_OFF) {
+                mat[as.character(country1),as.character(country2)]<-1
+              }}}}}}}
+  #print(isSymmetric(mat))
+  assign(paste("deploymentS", i, sep="_"), mat)
+  
+  nms3[ct] <- paste("deploymentS", i, sep="_")
+}
+
+nms1 <- lapply(nms, get)
+nms4 <- lapply(nms3, get)
+deployment_net_SAOM  <- array(do.call("c", nms4), dim = c(length(codes), length(codes),   length(1991:2022) ))
+
+
+```
+
+
+
+#### Monadic feautures
+
+
+
+
+```{r}
+features = read.csv("~/Final Theses/code/descriptive analysis/features.csv")
+monadic_feature <- function(df, codes, feature_column){
+  df %>% filter(node_ccode %in% codes) %>% 
+    select(node_ccode, year, feature_column) %>% 
+    pivot_wider(names_from = year, values_from = feature_column) %>% 
+    select(  c(`1991`:`2022`)) %>% as.matrix() -> matrix_feature
+  return (varCovar(matrix_feature))
+}
+
+features$nato_member = as.numeric(features$nato_member)
+
+
+nato_membership <- monadic_feature(features, codes, 'nato_member')
+csto <- monadic_feature(features, codes, 'csto')
+nato_partner <- monadic_feature(features, codes, 'nato_partner')
+african_union <- monadic_feature(features, codes, 'african_union')
+log_army <- monadic_feature(features, codes, 'log_military_personnel')
+log_expenditures <- monadic_feature(features, codes, 'log_military_expenditures')
+nato_min_spending <- monadic_feature(features, codes, 'nato_spending')
+major_power <- monadic_feature(features,codes, "major_power")
+small_power <- monadic_feature(features,codes, "small_power")
+major_power_nato <- monadic_feature(features,codes, "major_power_nato")
+small_power_nato <- monadic_feature(features,codes, "small_power_nato")
+
+
+log_gdp <- monadic_feature(features, codes,"log_gdp")
+is_democracy <- monadic_feature(features,codes, "is_democracy")
+political_regime <- monadic_feature(features,codes,  "v2x_regime")
+
+```
+
+
+
+#### Dyadic features
+
+
+
+```{r}
+dyad_features  = read.csv("~/Final Theses/code/descriptive analysis/dyad_features.csv")
+LAG <- 0
+
+
+
+
+
+for (i in 1991:2022) {
+  
+  edges <- dyad_features[dyad_features$year == i-LAG,][c("ccode1","ccode2","log_dist")]
+  mat <- matrix(0, nrow=length(codes), ncol=length(codes), dimnames=list(codes, codes))
+  for (country1 in unique(codes)){
+    #print("distance")
+    #print(country1)
+    for (country2 in unique(codes)){
+      if(country1!=country2){
+        if ((length(edges[edges$ccode1==country1&edges$ccode2==country2,"log_dist"])>0)==TRUE) {
+          if(is.na(edges[edges$ccode1==country1&edges$ccode2==country2,"log_dist"])==FALSE){
+            mat[as.character(country1),as.character(country2)]<-edges[edges$ccode1==country1&edges$ccode2==country2,"log_dist"]
+          }}}}}
+  mat1<-mat
+  mat <- network(mat)
+  mat <- handleMissings(mat, na = NA, method = "zero", logical = FALSE)
+  assign(paste("geo_distance", i, sep="_"), mat)
+  nms[ct] <- paste("geo_distance", i, sep="_")
+  ct <- ct+1
+  rm(edges, mat)    
+}; rm(ct, i)
+nms1 <- lapply(nms, get)
+Distance_net <- nms1
+
+Mindist_net <- coDyadCovar(mat1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+dependent_var <- sienaDependent(deployment_net_SAOM, allowOnly=FALSE)
+
+```
+
+
+```{r}
+data_model1 <- sienaDataCreate(dependent_var, 
+                               nato_membership,
+                               nato_partner,
+                               csto, 
+                               african_union,
+                               log_army,
+                               log_expenditures,
+                               nato_min_spending,
+                               major_power,
+                               small_power,
+                               major_power_nato,
+                               small_power_nato,
+                               log_gdp,
+                               is_democracy,
+                               political_regime,
+                                Mindist_net,
+                               NATO_missions_net
+                               )
+```
+
+
+
+
+
+```{r}
+myeff <- getEffects( data_model1 )
+myeff <- includeEffects( myeff, density, include = TRUE)
+myeff <- includeEffects( myeff, gwespFB, gwdspFF, gwdspFB)
+myeff <- includeEffects( myeff, recip)
+
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "nato_membership")
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "nato_partner")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_army")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_expenditures")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "major_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "small_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "political_regime")
+myeff <- includeEffects( myeff, X, interaction1 = "Mindist_net" )
+
+
+Model_SAOM <- sienaModelCreate(useStdInits = TRUE, projname = "pioneer1")
+saom_model1 <- siena07(Model_SAOM, data = data_model1, effects = myeff,
+                             batch=F,verbose=F,useCluster=T,
+                             nbrNodes=4, returnDeps = TRUE) 
+```
+
+
+
+
+
+
+```{r}
+myeff <- getEffects( data_model1 )
+
+myeff <- includeEffects( myeff, density, include = TRUE)
+myeff <- includeEffects( myeff, gwespFB, gwdspFF, gwdspFB)
+myeff <- includeEffects( myeff, recip)
+
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "nato_min_spending")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_army")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "major_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "small_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "political_regime")
+myeff <- includeEffects( myeff, X, interaction1 = "Mindist_net" )
+
+
+
+Model_SAOM <- sienaModelCreate(useStdInits = TRUE, projname = "pioneer1")
+saom_model2 <- siena07(Model_SAOM, data = data_model1, effects = myeff,
+                             batch=F,verbose=F,useCluster=T,
+                             nbrNodes=4, returnDeps = TRUE) 
+
+```
+
+
+```{r}
+myeff <- getEffects( data_model1 )
+myeff <- includeEffects( myeff, density, include = TRUE)
+myeff <- includeEffects( myeff, gwespFB, gwdspFF, gwdspFB)
+myeff <- includeEffects( myeff, recip)
+
+
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_army")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_expenditures")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "major_power_nato")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "small_power_nato")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "political_regime")
+myeff <- includeEffects( myeff, X, interaction1 = "Mindist_net" )
+
+
+Model_SAOM <- sienaModelCreate(useStdInits = TRUE, projname = "pioneer1")
+saom_model3 <- siena07(Model_SAOM, data = data_model1, effects = myeff,
+                             batch=F,verbose=F,useCluster=T,
+                             nbrNodes=4, returnDeps = TRUE) 
+```
+
+
+
+
+
+
+```{r}
+myeff <- getEffects( data_model1 )
+myeff <- includeEffects( myeff, density, include = TRUE)
+myeff <- includeEffects( myeff, gwespFB, gwdspFF, gwdspFB)
+myeff <- includeEffects( myeff, recip)
+
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "nato_membership")
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "nato_partner")
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "log_gdp")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_army")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "major_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "small_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "political_regime")
+myeff <- includeEffects( myeff, X, interaction1 = "Mindist_net" )
+
+
+Model_SAOM <- sienaModelCreate(useStdInits = TRUE, projname = "pioneer1")
+saom_model4 <- siena07(Model_SAOM, data = data_model1, effects = myeff,
+                             batch=F,verbose=F,useCluster=T,
+                             nbrNodes=4, returnDeps = TRUE) 
+```
+
+
+```{r}
+myeff <- getEffects( data_model1 )
+myeff <- includeEffects( myeff, density, include = TRUE)
+myeff <- includeEffects( myeff, gwespFB, gwdspFF, gwdspFB)
+myeff <- includeEffects( myeff, recip)
+
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "nato_membership")
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "csto")
+#myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "african_union")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_army")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_expenditures")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "major_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "small_power")
+#myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "political_regime")
+myeff <- includeEffects( myeff, X, interaction1 = "Mindist_net" )
+
+
+Model_SAOM <- sienaModelCreate(useStdInits = TRUE, projname = "pioneer1")
+saom_model5.1 <- siena07(Model_SAOM, data = data_model1, effects = myeff,
+                             batch=F,verbose=F,useCluster=T,
+                             nbrNodes=4, returnDeps = TRUE) 
+```
+
+```{r}
+myeff <- getEffects( data_model1 )
+myeff <- includeEffects( myeff, density, include = TRUE)
+myeff <- includeEffects( myeff, gwespFB, gwdspFF, gwdspFB)
+myeff <- includeEffects( myeff, recip)
+
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "nato_membership")
+#myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "csto")
+myeff <- includeEffects( myeff,  egoX ,altX, interaction1 = "african_union")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_army")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "log_expenditures")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "major_power")
+myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "small_power")
+#myeff <- includeEffects( myeff,  egoX, altX, interaction1 = "political_regime")
+myeff <- includeEffects( myeff, X, interaction1 = "Mindist_net" )
+
+
+Model_SAOM <- sienaModelCreate(useStdInits = TRUE, projname = "pioneer1")
+saom_model5.2 <- siena07(Model_SAOM, data = data_model1, effects = myeff,
+                             batch=F,verbose=F,useCluster=T,
+                             nbrNodes=4, returnDeps = TRUE) 
+```
+
+
+```{r}
+texreg::texreg(list( saom_model1, saom_model2, saom_model3, saom_model4) )
+```
+
+
+
+
+
+
+
+```{r}
+texreg::texreg(list( saom_model5.1, saom_model5.2) )
+```
+
+
+
+
+
+```{r}
+myeff <- getEffects( data_model1 )
+myeff <- includeEffects( myeff, density, include = TRUE)
+myeff <- includeEffects( myeff, gwespFB, gwdspFF, gwdspFB)
+myeff <- includeEffects( myeff, recip)
+
+
+myeff <- includeEffects( myeff, X, interaction1 = "Mindist_net" )
+
+
+Model_SAOM <- sienaModelCreate(useStdInits = TRUE, projname = "pioneer1")
+saom_model6 <- siena07(Model_SAOM, data = data_model1, effects = myeff,
+                             batch=F,verbose=F,useCluster=T,
+                             nbrNodes=4, returnDeps = TRUE) 
+```
+
+
+
+
+```{r}
+texreg::texreg(list( saom_model6) )
+```
+
+
+
+
+
+```{r}
+
+GOF_SAOM <- gof(saom_model1, parallel = "snow",  ncpus = Nodes, verbose = "TRUE")
+```
+
+
+
+
+
+
+
+
+
